@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>StudyRun Core+ Stable</title>
+
+<style>
+:root{
+  --bg:#020617;
+  --fg:#e5e7eb;
+  --accent:#22d3ee;
+  --good:#22c55e;
+  --bad:#ef4444;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{
+  width:100%;height:100%;
+  overflow:hidden;
+  background:var(--bg);
+  color:var(--fg);
+  font-family:system-ui;
+}
+
+.overlay{
+position:fixed;inset:0;
+display:flex;flex-direction:column;
+justify-content:center;align-items:center;
+gap:10px;padding:20px;
+background:radial-gradient(circle,#020617,#000);
+z-index:10;
+}
+
+textarea{
+width:100%;max-width:520px;height:180px;
+background:#0f172a;
+color:white;
+border:1px solid #1e293b;
+border-radius:10px;
+padding:10px;
+font-size:12px;
+}
+
+button{
+padding:12px 16px;
+border-radius:10px;
+border:none;
+cursor:pointer;
+background:linear-gradient(90deg,var(--accent),#a78bfa);
+font-weight:700;
+}
+
+#game{
+display:none;
+position:fixed;inset:0;
+flex-direction:column;
+}
+
+#hud{
+display:flex;
+justify-content:space-between;
+padding:10px;
+background:#0f172a;
+font-size:14px;
+}
+
+#question{
+text-align:center;
+padding:10px;
+font-size:16px;
+min-height:40px;
+}
+
+#field{
+flex:1;
+position:relative;
+overflow:hidden;
+}
+
+.laneLine{
+position:absolute;top:0;bottom:0;
+width:2px;background:#1e293b;
+}
+
+.player{
+position:absolute;
+bottom:60px;
+width:80px;height:45px;
+background:var(--accent);
+border-radius:12px;
+text-align:center;
+line-height:45px;
+transform:translateX(-50%);
+font-size:20px;
+}
+
+.answer{
+position:absolute;
+width:90px;
+padding:8px;
+text-align:center;
+border-radius:10px;
+background:#0f172a;
+border:1px solid #1e293b;
+transform:translateX(-50%);
+font-size:12px;
+}
+
+.correct{border-color:var(--good)}
+.wrong{border-color:var(--bad)}
+
+#controls{display:flex}
+
+.ctrl{
+flex:1;
+padding:18px;
+text-align:center;
+background:#111827;
+user-select:none;
+}
+
+.boostBtn{
+position:absolute;
+right:10px;
+bottom:90px;
+padding:10px 14px;
+background:#22c55e33;
+border:1px solid #22c55e;
+border-radius:10px;
+cursor:pointer;
+}
+
+.pause{
+position:absolute;
+top:10px;
+right:10px;
+padding:6px 10px;
+background:#1e293b;
+border-radius:8px;
+cursor:pointer;
+}
+</style>
+</head>
+
+<body>
+
+<div class="overlay" id="start">
+<h2>StudyRun</h2>
+<textarea id="input" placeholder="Paste your study sheet here..."></textarea>
+<button onclick="start()">Start Game</button>
+</div>
+
+<div id="game">
+
+<div id="hud">
+<div>Score: <span id="score">0</span></div>
+<div>Streak: <span id="streak">0</span></div>
+<div>Mult: x<span id="mult">1</span></div>
+</div>
+
+<div id="question"></div>
+
+<div id="field">
+<div id="player" class="player">🧠</div>
+<div class="pause" onclick="togglePause()">⏸</div>
+<div class="boostBtn" id="boostBtn">BOOST</div>
+</div>
+
+<div id="controls">
+<div class="ctrl" onclick="move(-1)">◀</div>
+<div class="ctrl" onclick="move(1)">▶</div>
+</div>
+
+</div>
+
+<script>
+
+let deck=[];
+let current=null;
+let answers=[];
+let correctIndex=0;
+
+let lane=1;
+let target=1;
+
+let score=0;
+let streak=0;
+let mult=1;
+
+let speed=1;
+let paused=false;
+let boost=false;
+
+const LANES=4;
+
+function demoDeck(){
+return [
+{q:"CPU",a:"Processor"},
+{q:"RAM",a:"Memory"},
+{q:"HTTP",a:"Web protocol"},
+{q:"DNS",a:"Name system"},
+];
+}
+
+/* -----------------------------
+   STABLE PARSER
+----------------------------- */
+function parse(txt){
+if(!txt.trim()) return demoDeck();
+
+const lines = txt
+  .split('\n')
+  .map(l => l.trim())
+  .filter(Boolean);
+
+let deck=[];
+let i=0;
+
+while(i < lines.length){
+
+  let line = lines[i];
+
+  // skip junk
+  if(
+    line.startsWith("-") ||
+    line.includes("Not studied") ||
+    line.length < 2
+  ){
+    i++;
+    continue;
+  }
+
+  let q="", a="";
+
+  // define: style
+  if(line.toLowerCase().startsWith("define:")){
+    q = line.split(":")[1].trim();
+    i++;
+
+    while(i < lines.length && !lines[i].toLowerCase().includes(":")){
+      if(lines[i].length > 0){
+        a += lines[i] + " ";
+      }
+      i++;
+    }
+
+    deck.push({q, a:a.trim()});
+    continue;
+  }
+
+  // fallback Q/A
+  q = line;
+  i++;
+
+  if(i < lines.length){
+    let maybe = lines[i];
+    if(maybe && !maybe.includes(":")){
+      a = maybe;
+      i++;
+    }
+  }
+
+  if(q && a){
+    deck.push({q, a});
+  }
+}
+
+return deck.length ? deck : demoDeck();
+}
+
+/* ----------------------------- */
+
+function start(){
+deck=parse(document.getElementById('input').value);
+
+document.getElementById('start').style.display="none";
+document.getElementById('game').style.display="flex";
+
+buildLanes();
+next();
+loop();
+}
+
+function buildLanes(){
+const field=document.getElementById('field');
+for(let i=1;i<LANES;i++){
+let d=document.createElement('div');
+d.className='laneLine';
+d.style.left=(i*(100/LANES))+'%';
+field.appendChild(d);
+}
+}
+
+function laneX(i){
+return (i+0.5)*(100/LANES);
+}
+
+function showQ(){
+document.getElementById('question').textContent = current.q;
+}
+
+function next(){
+current = deck[Math.floor(Math.random()*deck.length)];
+
+let wrongs = deck
+.filter(d=>d!==current)
+.slice(0,3)
+.map(d=>d.a);
+
+answers = [current.a, ...wrongs].sort(()=>Math.random()-0.5);
+
+correctIndex = answers.indexOf(current.a);
+
+render();
+showQ();
+}
+
+function render(){
+document.querySelectorAll('.answer').forEach(e=>e.remove());
+
+answers.forEach((a,i)=>{
+let el=document.createElement('div');
+el.className='answer';
+el.textContent=a;
+el.dataset.correct=(i===correctIndex);
+el.dataset.lane=i;
+el.style.left=laneX(i)+'%';
+el.style.top='-60px';
+document.getElementById('field').appendChild(el);
+});
+}
+
+function move(d){
+target=Math.max(0,Math.min(LANES-1,target+d));
+}
+
+document.addEventListener('keydown',e=>{
+if(e.key==="ArrowLeft") move(-1);
+if(e.key==="ArrowRight") move(1);
+if(e.key===" ") togglePause();
+
+if(e.key==="ArrowUp") boost=true;
+if(e.key==="ArrowDown") speed=0.4;
+});
+
+document.addEventListener('keyup',e=>{
+if(e.key==="ArrowUp") boost=false;
+if(e.key==="ArrowDown") speed=1;
+});
+
+document.getElementById('boostBtn').onmousedown=()=>boost=true;
+document.getElementById('boostBtn').onmouseup=()=>boost=false;
+
+function togglePause(){paused=!paused;}
+
+function loop(){
+if(!paused){
+
+lane += (target-lane)*0.18;
+document.getElementById('player').style.left=laneX(lane)+'%';
+
+document.querySelectorAll('.answer').forEach(el=>{
+let top=parseFloat(el.style.top)+speed;
+el.style.top=top+'px';
+
+let elLane=parseInt(el.dataset.lane);
+let correct=el.dataset.correct==="true";
+
+let near=top>window.innerHeight-180;
+
+// BOOST (lane alignment pickup)
+if(boost && correct && Math.abs(lane-elLane)<0.5){
+hit(el,true,true);
+}
+
+if(near && Math.round(lane)===elLane){
+hit(el,correct,false);
+}
+
+if(top>window.innerHeight){
+el.remove();
+next();
+}
+});
+}
+
+requestAnimationFrame(loop);
+}
+
+function hit(el,correct,boosted){
+
+if(correct){
+streak++;
+score+=10*mult;
+mult=1+Math.floor(streak/5);
+el.classList.add("correct");
+}else{
+streak=0;
+mult=1;
+el.classList.add("wrong");
+}
+
+document.getElementById('score').textContent=score;
+document.getElementById('streak').textContent=streak;
+document.getElementById('mult').textContent=mult.toFixed(1);
+
+setTimeout(()=>next(),120);
+}
+
+</script>
+
+</body>
+</html>
